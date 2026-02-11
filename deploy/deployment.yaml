@@ -1,0 +1,60 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: stash-rule
+  namespace: default
+  labels:
+    app: stash-rule
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: stash-rule
+  template:
+    metadata:
+      labels:
+        app: stash-rule
+    spec:
+      containers:
+        - name: stash-rule
+          image: stash-rule:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8080
+          env:
+            - name: PORT
+              value: "8080"
+            - name: REDIS_ADDR
+              value: "redis-service:6379" # 修改为实际 Redis 地址
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 2
+            periodSeconds: 10
+          resources:
+            requests:
+              memory: "16Mi"
+              cpu: "20m"
+            limits:
+              memory: "64Mi"
+              cpu: "100m"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: stash-rule
+  namespace: default
+spec:
+  selector:
+    app: stash-rule
+  ports:
+    - port: 80
+      targetPort: 8080
+  type: ClusterIP

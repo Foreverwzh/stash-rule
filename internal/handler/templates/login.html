@@ -1,0 +1,140 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Stash Rule 登录</title>
+    <style>
+      body {
+        font-family:
+          -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+          "Helvetica Neue", Arial, sans-serif;
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        height: 100vh;
+        margin: 0;
+        background-color: #f5f5f7;
+      }
+      .login-box {
+        background: white;
+        padding: 40px;
+        border-radius: 12px;
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+        width: 300px;
+      }
+      h1 {
+        margin-top: 0;
+        text-align: center;
+        color: #1d1d1f;
+        font-size: 24px;
+        margin-bottom: 24px;
+      }
+      .input-group {
+        margin-bottom: 16px;
+      }
+      label {
+        display: block;
+        margin-bottom: 8px;
+        color: #1d1d1f;
+        font-size: 14px;
+        font-weight: 500;
+      }
+      input {
+        width: 100%;
+        padding: 10px;
+        border: 1px solid #d2d2d7;
+        border-radius: 6px;
+        font-size: 16px;
+        box-sizing: border-box;
+      }
+      input:focus {
+        border-color: #0071e3;
+        outline: none;
+      }
+      .btn {
+        width: 100%;
+        background-color: #0071e3;
+        color: white;
+        border: none;
+        padding: 12px;
+        border-radius: 6px;
+        font-size: 16px;
+        cursor: pointer;
+        transition: background-color 0.2s;
+        font-weight: 500;
+      }
+      .btn:hover {
+        background-color: #0077ed;
+      }
+      #error-msg {
+        margin-top: 16px;
+        color: #c62828;
+        font-size: 14px;
+        text-align: center;
+        display: none;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="login-box">
+      <h1>管理员登录</h1>
+      <div style="text-align: center; color: #86868b; font-size: 13px; margin-bottom: 14px">
+        仅管理员账号可登录后台
+      </div>
+      <div class="input-group">
+        <label>用户名</label>
+        <input type="text" id="username" placeholder="admin" autofocus />
+      </div>
+      <div class="input-group">
+        <label>密码</label>
+        <input type="password" id="password" placeholder="admin" />
+      </div>
+      <button class="btn" onclick="login()">登录</button>
+      <div id="error-msg"></div>
+    </div>
+
+    <script>
+      async function login() {
+        const user = document.getElementById("username").value;
+        const pass = document.getElementById("password").value;
+        const btn = document.querySelector(".btn");
+        const errorMsg = document.getElementById("error-msg");
+
+        errorMsg.style.display = "none";
+        btn.disabled = true;
+        btn.textContent = "登录中...";
+
+        try {
+          const res = await fetch("/login", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ username: user, password: pass }),
+          });
+
+          if (res.ok) {
+            window.location.href = "/admin";
+          } else {
+            const data = await res.json();
+            throw new Error(data.error || "登录失败");
+          }
+        } catch (err) {
+          errorMsg.textContent = err.message;
+          errorMsg.style.display = "block";
+        } finally {
+          btn.disabled = false;
+          btn.textContent = "登录";
+        }
+      }
+
+      // Allow Enter key to submit
+      document.querySelectorAll("input").forEach((input) => {
+        input.addEventListener("keypress", function (e) {
+          if (e.key === "Enter") {
+            login();
+          }
+        });
+      });
+    </script>
+  </body>
+</html>

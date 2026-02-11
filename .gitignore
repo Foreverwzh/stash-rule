@@ -1,0 +1,48 @@
+# Go build outputs
+bin/
+dist/
+build/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+*.coverprofile
+coverage.out
+cover.out
+
+# Project binaries
+stash-rule
+my-stash-rule
+
+# Go workspace (optional/local)
+go.work
+go.work.sum
+
+# Python leftovers (if any scripts are used)
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+uv.lock
+
+# Environment variables
+.env
+.env.*
+!.env.example
+
+# Logs and temp files
+*.log
+tmp/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db

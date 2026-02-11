@@ -1,0 +1,15 @@
+.git
+.venv
+.env
+.env.example
+__pycache__
+*.py
+*.pyc
+uv.lock
+pyproject.toml
+stash_rule.egg-info
+app/
+deploy/
+README.md
+stash-rule
+my-stash-rule
