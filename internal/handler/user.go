@@ -58,6 +58,8 @@ func HandleGetUserInfo(w http.ResponseWriter, r *http.Request) {
 // HandleSubscribersAPI 订阅用户管理接口
 // GET: 获取订阅用户列表
 // POST: 新增订阅用户（自动生成随机 token）
+// PUT: 更新订阅用户绑定模板
+// DELETE: 删除订阅用户
 func HandleSubscribersAPI(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
@@ -75,6 +77,82 @@ func HandleSubscribersAPI(w http.ResponseWriter, r *http.Request) {
 
 	if r.Method == http.MethodPost {
 		var req struct {
+			Username    string `json:"username"`
+			ProfileName string `json:"profile_name"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, `{"error":"invalid request"}`, http.StatusBadRequest)
+			return
+		}
+
+		username := strings.TrimSpace(req.Username)
+		if username == "" {
+			http.Error(w, `{"error":"订阅用户名不能为空"}`, http.StatusBadRequest)
+			return
+		}
+
+		profileName := strings.TrimSpace(req.ProfileName)
+		token, err := store.AddSubscriber(username, profileName)
+		if err != nil {
+			status := http.StatusBadRequest
+			if strings.Contains(err.Error(), "already exists") {
+				status = http.StatusConflict
+			}
+			if strings.Contains(err.Error(), "not found") {
+				status = http.StatusNotFound
+			}
+			http.Error(w, `{"error":"`+err.Error()+`"}`, status)
+			return
+		}
+
+		_ = json.NewEncoder(w).Encode(map[string]string{
+			"status":       "ok",
+			"username":     username,
+			"token":        token,
+			"profile_name": store.DefaultStashProfileNameIfEmpty(profileName),
+		})
+		return
+	}
+
+	if r.Method == http.MethodPut {
+		var req struct {
+			Username    string `json:"username"`
+			ProfileName string `json:"profile_name"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, `{"error":"invalid request"}`, http.StatusBadRequest)
+			return
+		}
+
+		username := strings.TrimSpace(req.Username)
+		profileName := strings.TrimSpace(req.ProfileName)
+		if username == "" {
+			http.Error(w, `{"error":"订阅用户名不能为空"}`, http.StatusBadRequest)
+			return
+		}
+
+		if err := store.UpdateSubscriberProfile(username, profileName); err != nil {
+			status := http.StatusBadRequest
+			if strings.Contains(err.Error(), "subscriber not found") {
+				status = http.StatusNotFound
+			}
+			if strings.Contains(err.Error(), "stash profile not found") {
+				status = http.StatusNotFound
+			}
+			http.Error(w, `{"error":"`+err.Error()+`"}`, status)
+			return
+		}
+
+		_ = json.NewEncoder(w).Encode(map[string]string{
+			"status":       "ok",
+			"username":     username,
+			"profile_name": store.DefaultStashProfileNameIfEmpty(profileName),
+		})
+		return
+	}
+
+	if r.Method == http.MethodDelete {
+		var req struct {
 			Username string `json:"username"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -88,11 +166,10 @@ func HandleSubscribersAPI(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		token, err := store.AddSubscriber(username)
-		if err != nil {
+		if err := store.DeleteSubscriber(username); err != nil {
 			status := http.StatusBadRequest
-			if strings.Contains(err.Error(), "already exists") {
-				status = http.StatusConflict
+			if strings.Contains(err.Error(), "subscriber not found") {
+				status = http.StatusNotFound
 			}
 			http.Error(w, `{"error":"`+err.Error()+`"}`, status)
 			return
@@ -101,7 +178,6 @@ func HandleSubscribersAPI(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(map[string]string{
 			"status":   "ok",
 			"username": username,
-			"token":    token,
 		})
 		return
 	}

@@ -2,13 +2,24 @@ package service
 
 import (
 	"bytes"
+	"reflect"
 	"regexp"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
 
 // GenerateConfig generates the complete Stash YAML configuration
-func GenerateConfig(proxies []ProxyNode) ([]byte, error) {
+func GenerateConfig(proxies []ProxyNode, overlays ...map[string]interface{}) ([]byte, error) {
+	config := BuildConfigMap(proxies)
+	for _, overlay := range overlays {
+		config = DeepMergeMap(config, overlay)
+	}
+	return GenerateConfigFromMap(config)
+}
+
+// BuildConfigMap generates the default dynamic configuration map.
+func BuildConfigMap(proxies []ProxyNode) map[string]interface{} {
 	var proxyNames []string
 	for _, p := range proxies {
 		if name, ok := p["name"].(string); ok {
@@ -75,6 +86,11 @@ func GenerateConfig(proxies []ProxyNode) ([]byte, error) {
 		"rules": buildRules(),
 	}
 
+	return config
+}
+
+// GenerateConfigFromMap encodes a config map into YAML bytes.
+func GenerateConfigFromMap(config map[string]interface{}) ([]byte, error) {
 	var buf bytes.Buffer
 	enc := yaml.NewEncoder(&buf)
 	enc.SetIndent(2)
@@ -82,21 +98,154 @@ func GenerateConfig(proxies []ProxyNode) ([]byte, error) {
 	return buf.Bytes(), err
 }
 
+func toStringMap(value interface{}) (map[string]interface{}, bool) {
+	switch typed := value.(type) {
+	case map[string]interface{}:
+		return typed, true
+	case map[interface{}]interface{}:
+		out := make(map[string]interface{}, len(typed))
+		for k, v := range typed {
+			key, ok := k.(string)
+			if !ok {
+				continue
+			}
+			out[key] = v
+		}
+		return out, true
+	default:
+		return nil, false
+	}
+}
+
+func cloneValue(value interface{}) interface{} {
+	switch typed := value.(type) {
+	case map[string]interface{}:
+		out := make(map[string]interface{}, len(typed))
+		for k, v := range typed {
+			out[k] = cloneValue(v)
+		}
+		return out
+	case map[interface{}]interface{}:
+		out := make(map[string]interface{}, len(typed))
+		for k, v := range typed {
+			key, ok := k.(string)
+			if !ok {
+				continue
+			}
+			out[key] = cloneValue(v)
+		}
+		return out
+	case []interface{}:
+		out := make([]interface{}, 0, len(typed))
+		for _, v := range typed {
+			out = append(out, cloneValue(v))
+		}
+		return out
+	default:
+		return value
+	}
+}
+
+func toInterfaceSlice(value interface{}) ([]interface{}, bool) {
+	if value == nil {
+		return nil, false
+	}
+
+	switch typed := value.(type) {
+	case []interface{}:
+		return typed, true
+	}
+
+	rv := reflect.ValueOf(value)
+	if rv.Kind() != reflect.Slice && rv.Kind() != reflect.Array {
+		return nil, false
+	}
+
+	out := make([]interface{}, rv.Len())
+	for i := 0; i < rv.Len(); i++ {
+		out[i] = rv.Index(i).Interface()
+	}
+	return out, true
+}
+
+func mergeSlices(base, override []interface{}) []interface{} {
+	out := make([]interface{}, 0, len(base)+len(override))
+	for _, item := range override {
+		out = append(out, cloneValue(item))
+	}
+	for _, item := range base {
+		out = append(out, cloneValue(item))
+	}
+	return out
+}
+
+// DeepMergeMap deep merges override into base. Map values are merged recursively.
+// Map values are merged recursively; arrays are concatenated (override + base);
+// other value types are replaced by override.
+func DeepMergeMap(base, override map[string]interface{}) map[string]interface{} {
+	if base == nil && override == nil {
+		return map[string]interface{}{}
+	}
+	if base == nil {
+		if override == nil {
+			return map[string]interface{}{}
+		}
+		cloned, _ := cloneValue(override).(map[string]interface{})
+		return cloned
+	}
+	if override == nil {
+		cloned, _ := cloneValue(base).(map[string]interface{})
+		return cloned
+	}
+
+	result := make(map[string]interface{}, len(base))
+	for key, baseValue := range base {
+		result[key] = cloneValue(baseValue)
+	}
+
+	for key, overrideValue := range override {
+		currentValue, exists := result[key]
+		overrideMap, overrideIsMap := toStringMap(overrideValue)
+		currentMap, currentIsMap := toStringMap(currentValue)
+		overrideSlice, overrideIsSlice := toInterfaceSlice(overrideValue)
+		currentSlice, currentIsSlice := toInterfaceSlice(currentValue)
+
+		if exists && currentIsMap && overrideIsMap {
+			result[key] = DeepMergeMap(currentMap, overrideMap)
+			continue
+		}
+		if exists && currentIsSlice && overrideIsSlice {
+			result[key] = mergeSlices(currentSlice, overrideSlice)
+			continue
+		}
+		result[key] = cloneValue(overrideValue)
+	}
+
+	return result
+}
+
 func classifyProxyName(name string) map[string]bool {
-	// Compile regex once in init() would be better but keeping it simple here
-	// to match the structure.
-	match := func(pattern string) bool {
-		re := regexp.MustCompile(pattern)
+	lower := strings.ToLower(name)
+	hasKeyword := func(keywords ...string) bool {
+		for _, keyword := range keywords {
+			if strings.Contains(lower, keyword) {
+				return true
+			}
+		}
+		return false
+	}
+	matchCodeToken := func(code string) bool {
+		re := regexp.MustCompile(`(?i)(^|[^a-z0-9])` + regexp.QuoteMeta(code) + `([^a-z0-9]|$)`)
 		return re.MatchString(name)
 	}
 
 	return map[string]bool{
-		"HK": match(`(?i)(?:🇭🇰|香港|HK|Hong\s*Kong)`),
-		"TW": match(`(?i)(?:🇹🇼|台湾|TW|Taiwan)`),
-		"JP": match(`(?i)(?:🇯🇵|日本|JP|Japan)`),
-		"SG": match(`(?i)(?:🇸🇬|新加坡|SG|Singapore)`),
-		"US": match(`(?i)(?:🇺🇸|美国|US|United\s*States|America)`),
-		"KR": match(`(?i)(?:🇰🇷|韩国|KR|Korea)`),
+		"HK": hasKeyword("🇭🇰", "香港", "hong kong") || matchCodeToken("HK"),
+		"TW": hasKeyword("🇹🇼", "台湾", "taiwan") || matchCodeToken("TW"),
+		"JP": hasKeyword("🇯🇵", "日本", "japan") || matchCodeToken("JP"),
+		"SG": hasKeyword("🇸🇬", "新加坡", "狮城", "坡县", "singapore") || matchCodeToken("SG") || matchCodeToken("SGP"),
+		"US": hasKeyword("🇺🇸", "美国", "united states", "america") || matchCodeToken("US") || matchCodeToken("USA"),
+		"KR": hasKeyword("🇰🇷", "韩国", "korea") || matchCodeToken("KR"),
 	}
 }
 
@@ -105,7 +254,7 @@ func buildProxyGroups(proxyNames []string, regionGroups map[string][]string) []m
 
 	// Node Select
 	groups = append(groups, map[string]interface{}{
-		"name": "节点选择",
+		"name": "Proxies",
 		"type": "select",
 		"proxies": append([]string{
 			"自动选择", "香港节点", "台湾节点", "日本节点",
@@ -149,168 +298,124 @@ func buildProxyGroups(proxyNames []string, regionGroups map[string][]string) []m
 			})
 		} else {
 			// Fallback if no nodes for region
-			proxies := proxyNames
-			if len(proxies) == 0 {
-				proxies = []string{"DIRECT"}
-			}
 			groups = append(groups, map[string]interface{}{
 				"name":    rc.Name,
 				"type":    "select",
-				"proxies": proxies,
+				"proxies": []string{"自动选择", "DIRECT"},
 			})
 		}
 	}
 
-	// Media
+	// Application Groups
 	groups = append(groups, map[string]interface{}{
-		"name": "流媒体",
+		"name": "YouTube",
 		"type": "select",
 		"proxies": []string{
-			"节点选择", "香港节点", "台湾节点", "日本节点",
-			"新加坡节点", "美国节点", "韩国节点", "DIRECT",
+			"Proxies", "香港节点", "日本节点", "新加坡节点", "台湾节点", "美国节点",
 		},
 	})
-
-	// AI Services
 	groups = append(groups, map[string]interface{}{
-		"name": "AI 服务",
+		"name": "Disney",
 		"type": "select",
 		"proxies": []string{
-			"美国节点", "日本节点", "新加坡节点", "节点选择", "DIRECT",
+			"Proxies", "香港节点", "日本节点", "新加坡节点", "台湾节点", "美国节点",
+		},
+	})
+	groups = append(groups, map[string]interface{}{
+		"name": "Hbomax",
+		"type": "select",
+		"proxies": []string{
+			"Proxies", "香港节点", "日本节点", "新加坡节点", "台湾节点", "美国节点",
+		},
+	})
+	groups = append(groups, map[string]interface{}{
+		"name": "Netflix",
+		"type": "select",
+		"proxies": []string{
+			"Proxies", "香港节点", "日本节点", "新加坡节点", "台湾节点", "美国节点",
+		},
+	})
+	groups = append(groups, map[string]interface{}{
+		"name": "Bahamut",
+		"type": "select",
+		"proxies": []string{
+			"Proxies", "香港节点", "台湾节点",
+		},
+	})
+	groups = append(groups, map[string]interface{}{
+		"name": "Bilibili",
+		"type": "select",
+		"proxies": []string{
+			"DIRECT", "香港节点", "台湾节点",
+		},
+	})
+	groups = append(groups, map[string]interface{}{
+		"name": "Spotify",
+		"type": "select",
+		"proxies": []string{
+			"Proxies", "DIRECT", "香港节点", "日本节点", "新加坡节点", "台湾节点", "美国节点",
+		},
+	})
+	groups = append(groups, map[string]interface{}{
+		"name": "Steam",
+		"type": "select",
+		"proxies": []string{
+			"Proxies", "DIRECT", "香港节点", "日本节点", "新加坡节点", "台湾节点", "美国节点",
+		},
+	})
+	groups = append(groups, map[string]interface{}{
+		"name": "Telegram",
+		"type": "select",
+		"proxies": []string{
+			"Proxies", "香港节点", "日本节点", "新加坡节点", "台湾节点", "美国节点",
+		},
+	})
+	groups = append(groups, map[string]interface{}{
+		"name": "Google",
+		"type": "select",
+		"proxies": []string{
+			"Proxies", "香港节点", "日本节点", "新加坡节点", "台湾节点", "美国节点",
+		},
+	})
+	groups = append(groups, map[string]interface{}{
+		"name": "Microsoft",
+		"type": "select",
+		"proxies": []string{
+			"Proxies", "DIRECT", "香港节点", "日本节点", "新加坡节点", "台湾节点", "美国节点",
+		},
+	})
+	groups = append(groups, map[string]interface{}{
+		"name": "OpenAI",
+		"type": "select",
+		"proxies": []string{
+			"Proxies", "香港节点", "日本节点", "新加坡节点", "台湾节点", "美国节点",
+		},
+	})
+	groups = append(groups, map[string]interface{}{
+		"name": "PayPal",
+		"type": "select",
+		"proxies": []string{
+			"Proxies", "DIRECT", "香港节点", "日本节点", "新加坡节点", "台湾节点", "美国节点",
+		},
+	})
+	groups = append(groups, map[string]interface{}{
+		"name": "Apple",
+		"type": "select",
+		"proxies": []string{
+			"Proxies", "DIRECT", "香港节点", "日本节点", "新加坡节点", "台湾节点", "美国节点",
 		},
 	})
 
 	// Final Fallback
 	groups = append(groups, map[string]interface{}{
-		"name":    "漏网之鱼",
+		"name":    "Final",
 		"type":    "select",
-		"proxies": []string{"节点选择", "DIRECT"},
+		"proxies": []string{"Proxies", "DIRECT"},
 	})
 
 	return groups
 }
 
 func buildRules() []string {
-	return []string{
-		// ----- AdBlock -----
-		"DOMAIN-SUFFIX,ads.mopub.com,REJECT",
-		"DOMAIN-SUFFIX,analytics.google.com,REJECT",
-		// ----- AI Services -----
-		"DOMAIN-SUFFIX,openai.com,AI 服务",
-		"DOMAIN-SUFFIX,anthropic.com,AI 服务",
-		"DOMAIN-SUFFIX,claude.ai,AI 服务",
-		"DOMAIN-SUFFIX,bard.google.com,AI 服务",
-		"DOMAIN-SUFFIX,gemini.google.com,AI 服务",
-		"DOMAIN-SUFFIX,chat.openai.com,AI 服务",
-		"DOMAIN-SUFFIX,sora.com,AI 服务",
-		"DOMAIN-SUFFIX,chatgpt.com,AI 服务",
-		"DOMAIN-KEYWORD,openai,AI 服务",
-		// ----- Media -----
-		"DOMAIN-SUFFIX,netflix.com,流媒体",
-		"DOMAIN-SUFFIX,netflix.net,流媒体",
-		"DOMAIN-SUFFIX,nflxvideo.net,流媒体",
-		"DOMAIN-SUFFIX,nflximg.net,流媒体",
-		"DOMAIN-SUFFIX,nflxext.com,流媒体",
-		"DOMAIN-SUFFIX,disneyplus.com,流媒体",
-		"DOMAIN-SUFFIX,disney-plus.net,流媒体",
-		"DOMAIN-SUFFIX,hulu.com,流媒体",
-		"DOMAIN-SUFFIX,hbo.com,流媒体",
-		"DOMAIN-SUFFIX,hbomax.com,流媒体",
-		"DOMAIN-SUFFIX,youtube.com,流媒体",
-		"DOMAIN-SUFFIX,googlevideo.com,流媒体",
-		"DOMAIN-SUFFIX,ytimg.com,流媒体",
-		"DOMAIN-SUFFIX,spotify.com,流媒体",
-		"DOMAIN-SUFFIX,twitch.tv,流媒体",
-		// ----- Common Foreign -> Node Select -----
-		"DOMAIN-SUFFIX,google.com,节点选择",
-		"DOMAIN-SUFFIX,google.com.hk,节点选择",
-		"DOMAIN-SUFFIX,googleapis.com,节点选择",
-		"DOMAIN-SUFFIX,googlesource.com,节点选择",
-		"DOMAIN-SUFFIX,gstatic.com,节点选择",
-		"DOMAIN-SUFFIX,gmail.com,节点选择",
-		"DOMAIN-SUFFIX,github.com,节点选择",
-		"DOMAIN-SUFFIX,githubusercontent.com,节点选择",
-		"DOMAIN-SUFFIX,github.io,节点选择",
-		"DOMAIN-SUFFIX,githubassets.com,节点选择",
-		"DOMAIN-SUFFIX,twitter.com,节点选择",
-		"DOMAIN-SUFFIX,x.com,节点选择",
-		"DOMAIN-SUFFIX,twimg.com,节点选择",
-		"DOMAIN-SUFFIX,t.co,节点选择",
-		"DOMAIN-SUFFIX,facebook.com,节点选择",
-		"DOMAIN-SUFFIX,instagram.com,节点选择",
-		"DOMAIN-SUFFIX,whatsapp.com,节点选择",
-		"DOMAIN-SUFFIX,telegram.org,节点选择",
-		"DOMAIN-SUFFIX,t.me,节点选择",
-		"DOMAIN-SUFFIX,telegra.ph,节点选择",
-		"DOMAIN-SUFFIX,wikipedia.org,节点选择",
-		"DOMAIN-SUFFIX,wikimedia.org,节点选择",
-		"DOMAIN-SUFFIX,reddit.com,节点选择",
-		"DOMAIN-SUFFIX,redd.it,节点选择",
-		"DOMAIN-SUFFIX,redditstatic.com,节点选择",
-		"DOMAIN-SUFFIX,medium.com,节点选择",
-		"DOMAIN-SUFFIX,notion.so,节点选择",
-		"DOMAIN-SUFFIX,notion.site,节点选择",
-		"DOMAIN-SUFFIX,discord.com,节点选择",
-		"DOMAIN-SUFFIX,discordapp.com,节点选择",
-		"DOMAIN-SUFFIX,slack.com,节点选择",
-		"DOMAIN-SUFFIX,amazonaws.com,节点选择",
-		"DOMAIN-SUFFIX,cloudflare.com,节点选择",
-		"DOMAIN-SUFFIX,apple.com,DIRECT",
-		"DOMAIN-SUFFIX,icloud.com,DIRECT",
-		"DOMAIN-SUFFIX,microsoft.com,节点选择",
-		"DOMAIN-SUFFIX,live.com,节点选择",
-		"DOMAIN-SUFFIX,docker.com,节点选择",
-		"DOMAIN-SUFFIX,docker.io,节点选择",
-		"DOMAIN-SUFFIX,v2ex.com,节点选择",
-		"DOMAIN-SUFFIX,stackoverflow.com,节点选择",
-		"DOMAIN-SUFFIX,stackexchange.com,节点选择",
-		"DOMAIN-SUFFIX,grammarly.com,节点选择",
-		// ----- Domestic Direct -----
-		"DOMAIN-SUFFIX,cn,DIRECT",
-		"DOMAIN-SUFFIX,baidu.com,DIRECT",
-		"DOMAIN-SUFFIX,bdstatic.com,DIRECT",
-		"DOMAIN-SUFFIX,bilibili.com,DIRECT",
-		"DOMAIN-SUFFIX,bilivideo.com,DIRECT",
-		"DOMAIN-SUFFIX,hdslb.com,DIRECT",
-		"DOMAIN-SUFFIX,zhihu.com,DIRECT",
-		"DOMAIN-SUFFIX,douyin.com,DIRECT",
-		"DOMAIN-SUFFIX,tiktokv.com,DIRECT",
-		"DOMAIN-SUFFIX,taobao.com,DIRECT",
-		"DOMAIN-SUFFIX,tmall.com,DIRECT",
-		"DOMAIN-SUFFIX,alipay.com,DIRECT",
-		"DOMAIN-SUFFIX,jd.com,DIRECT",
-		"DOMAIN-SUFFIX,qq.com,DIRECT",
-		"DOMAIN-SUFFIX,wechat.com,DIRECT",
-		"DOMAIN-SUFFIX,weixin.qq.com,DIRECT",
-		"DOMAIN-SUFFIX,163.com,DIRECT",
-		"DOMAIN-SUFFIX,126.com,DIRECT",
-		"DOMAIN-SUFFIX,csdn.net,DIRECT",
-		"DOMAIN-SUFFIX,jianshu.com,DIRECT",
-		"DOMAIN-SUFFIX,aliyun.com,DIRECT",
-		"DOMAIN-SUFFIX,aliyuncs.com,DIRECT",
-		"DOMAIN-SUFFIX,tencentcloud.com,DIRECT",
-		"DOMAIN-SUFFIX,myqcloud.com,DIRECT",
-		"DOMAIN-SUFFIX,feishu.cn,DIRECT",
-		"DOMAIN-SUFFIX,feishu.net,DIRECT",
-		"DOMAIN-SUFFIX,dingtalk.com,DIRECT",
-		"DOMAIN-SUFFIX,meituan.com,DIRECT",
-		"DOMAIN-SUFFIX,dianping.com,DIRECT",
-		"DOMAIN-SUFFIX,xiaomi.com,DIRECT",
-		"DOMAIN-SUFFIX,huawei.com,DIRECT",
-		"DOMAIN-SUFFIX,weibo.com,DIRECT",
-		"DOMAIN-SUFFIX,sinaimg.cn,DIRECT",
-		"DOMAIN-SUFFIX,douban.com,DIRECT",
-		"DOMAIN-SUFFIX,ctrip.com,DIRECT",
-		// ----- LAN -----
-		"DOMAIN-SUFFIX,local,DIRECT",
-		"IP-CIDR,10.0.0.0/8,DIRECT,no-resolve",
-		"IP-CIDR,172.16.0.0/12,DIRECT,no-resolve",
-		"IP-CIDR,192.168.0.0/16,DIRECT,no-resolve",
-		"IP-CIDR,127.0.0.0/8,DIRECT,no-resolve",
-		"IP-CIDR,100.64.0.0/10,DIRECT,no-resolve",
-		// ----- GeoIP Direct -----
-		"GEOIP,CN,DIRECT",
-		// ----- Fallback -----
-		"MATCH,漏网之鱼",
-	}
+	return []string{}
 }

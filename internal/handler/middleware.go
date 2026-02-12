@@ -61,24 +61,41 @@ func AdminAuthMiddleware(next http.HandlerFunc) http.HandlerFunc {
 // 1) query token 命中有效订阅用户；或
 // 2) 已登录管理员 session。
 func HasConfigAccess(r *http.Request) (bool, error) {
+	username, _, err := ResolveConfigRequester(r)
+	if err != nil {
+		return false, err
+	}
+	return username != "", nil
+}
+
+// ResolveConfigRequester 解析配置请求方身份。
+// 返回值: username, isAdmin, err
+func ResolveConfigRequester(r *http.Request) (string, bool, error) {
 	token := r.URL.Query().Get("token")
 	if token != "" {
 		username, err := store.ValidateAPIToken(token)
 		if err != nil {
-			return false, err
+			return "", false, err
 		}
 		if username != "" {
-			return true, nil
+			return username, false, nil
 		}
 	}
 
 	username, err := getSessionUsername(r)
 	if err != nil {
-		return false, err
+		return "", false, err
 	}
 	if username == "" {
-		return false, nil
+		return "", false, nil
 	}
 
-	return isAdminUsername(username)
+	isAdmin, err := isAdminUsername(username)
+	if err != nil {
+		return "", false, err
+	}
+	if !isAdmin {
+		return "", false, nil
+	}
+	return username, true, nil
 }

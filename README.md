@@ -26,9 +26,9 @@ docker run -d -p 6379:6379 --name redis redis:alpine
 # 方式一：直接运行（读取 .env）
 # 环境变量配置 Redis 地址（默认 localhost:6379）
 # export REDIS_ADDR="localhost:6379"
-go run ./cmd/stash-rule
+go run .
 # 或者编译后运行
-# go build -o stash-rule ./cmd/stash-rule && ./stash-rule
+# go build -o stash-rule . && ./stash-rule
 ```
 
 访问管理页面配置订阅链接与订阅用户: `http://localhost:8080/admin`
@@ -44,6 +44,14 @@ go run ./cmd/stash-rule
 - 登录管理页面后，在“订阅用户管理”中新增订阅用户并复制链接。
 - 格式: `http://<your-ip>:8080/?token=<your-token>`
 - Token 由服务端随机生成（32 字节随机值的十六进制字符串）。
+
+**Stash 模板配置（Redis 缓存）**:
+
+- 系统内置 `default` 模板，可在线编辑。
+- 支持创建新模板并在创建订阅用户时选择模板（默认绑定 `default`）。
+- 用户最终配置生成规则:
+  - `动态基础配置` + `default 模板` + `用户模板`（仅当用户模板非 `default` 时）；
+  - 合并方式为深度 merge（map 递归合并，数组按 `base + override` 拼接，其他值由后者覆盖）。
 
 Docker 运行:
 

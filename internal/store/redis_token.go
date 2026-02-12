@@ -12,8 +12,9 @@ import (
 
 // Subscriber 表示一个订阅用户
 type Subscriber struct {
-	Username string `json:"username"`
-	Token    string `json:"token"`
+	Username    string `json:"username"`
+	Token       string `json:"token"`
+	ProfileName string `json:"profile_name"`
 }
 
 func generateRandomToken() (string, error) {
@@ -25,14 +26,23 @@ func generateRandomToken() (string, error) {
 }
 
 // AddSubscriber 创建订阅用户并返回随机 token
-func AddSubscriber(username string) (string, error) {
+func AddSubscriber(username, profileName string) (string, error) {
 	if rdb == nil {
 		return "", fmt.Errorf("redis not initialized")
 	}
 
 	username = strings.TrimSpace(username)
+	profileName = normalizeProfileName(profileName)
 	if username == "" {
 		return "", fmt.Errorf("username is required")
+	}
+
+	profileExists, err := ValidateStashProfileExists(profileName)
+	if err != nil {
+		return "", err
+	}
+	if !profileExists {
+		return "", fmt.Errorf("stash profile not found")
 	}
 
 	exists, err := rdb.HExists(ctx, redisUserTokenKey, username).Result()
@@ -61,6 +71,7 @@ func AddSubscriber(username string) (string, error) {
 		pipe := rdb.Pipeline()
 		pipe.HSet(ctx, redisTokenKey, token, username)
 		pipe.HSet(ctx, redisUserTokenKey, username, token)
+		pipe.HSet(ctx, redisUserProfileKey, username, profileName)
 		if _, err := pipe.Exec(ctx); err != nil {
 			return "", err
 		}
@@ -76,16 +87,22 @@ func ListSubscribers() ([]Subscriber, error) {
 		return nil, fmt.Errorf("redis not initialized")
 	}
 
-	m, err := rdb.HGetAll(ctx, redisUserTokenKey).Result()
+	tokenMap, err := rdb.HGetAll(ctx, redisUserTokenKey).Result()
+	if err != nil {
+		return nil, err
+	}
+	profileMap, err := rdb.HGetAll(ctx, redisUserProfileKey).Result()
 	if err != nil {
 		return nil, err
 	}
 
-	subscribers := make([]Subscriber, 0, len(m))
-	for username, token := range m {
+	subscribers := make([]Subscriber, 0, len(tokenMap))
+	for username, token := range tokenMap {
+		profileName := normalizeProfileName(profileMap[username])
 		subscribers = append(subscribers, Subscriber{
-			Username: username,
-			Token:    token,
+			Username:    username,
+			Token:       token,
+			ProfileName: profileName,
 		})
 	}
 
@@ -94,6 +111,87 @@ func ListSubscribers() ([]Subscriber, error) {
 	})
 
 	return subscribers, nil
+}
+
+// GetSubscriberProfile 获取订阅用户绑定的模板名。
+func GetSubscriberProfile(username string) (string, error) {
+	if rdb == nil {
+		return "", fmt.Errorf("redis not initialized")
+	}
+
+	profileName, err := rdb.HGet(ctx, redisUserProfileKey, username).Result()
+	if err == redis.Nil {
+		return DefaultStashProfileName, nil
+	}
+	if err != nil {
+		return "", err
+	}
+
+	if strings.TrimSpace(profileName) == "" {
+		return DefaultStashProfileName, nil
+	}
+	return profileName, nil
+}
+
+// UpdateSubscriberProfile 更新订阅用户绑定的模板名。
+func UpdateSubscriberProfile(username, profileName string) error {
+	if rdb == nil {
+		return fmt.Errorf("redis not initialized")
+	}
+
+	username = strings.TrimSpace(username)
+	profileName = normalizeProfileName(profileName)
+	if username == "" {
+		return fmt.Errorf("username is required")
+	}
+
+	userExists, err := rdb.HExists(ctx, redisUserTokenKey, username).Result()
+	if err != nil {
+		return err
+	}
+	if !userExists {
+		return fmt.Errorf("subscriber not found")
+	}
+
+	profileExists, err := ValidateStashProfileExists(profileName)
+	if err != nil {
+		return err
+	}
+	if !profileExists {
+		return fmt.Errorf("stash profile not found")
+	}
+
+	return rdb.HSet(ctx, redisUserProfileKey, username, profileName).Err()
+}
+
+// DeleteSubscriber 删除订阅用户及其 token/profile 绑定。
+func DeleteSubscriber(username string) error {
+	if rdb == nil {
+		return fmt.Errorf("redis not initialized")
+	}
+
+	username = strings.TrimSpace(username)
+	if username == "" {
+		return fmt.Errorf("username is required")
+	}
+
+	token, err := rdb.HGet(ctx, redisUserTokenKey, username).Result()
+	if err == redis.Nil {
+		return fmt.Errorf("subscriber not found")
+	}
+	if err != nil {
+		return err
+	}
+
+	pipe := rdb.Pipeline()
+	pipe.HDel(ctx, redisUserTokenKey, username)
+	pipe.HDel(ctx, redisUserProfileKey, username)
+	if token != "" {
+		pipe.HDel(ctx, redisTokenKey, token)
+	}
+
+	_, err = pipe.Exec(ctx)
+	return err
 }
 
 // ValidateAPIToken 验证订阅 token，返回用户名

@@ -16,13 +16,15 @@ import (
 )
 
 var (
-	ctx                = context.Background()
-	rdb                *redis.Client
-	redisKey           = "stash-rule:subscribe-urls"
-	redisAdminKey      = "stash-rule:admin"
-	redisTokenKey      = "stash-rule:subscriber_tokens"      // token -> username
-	redisUserTokenKey  = "stash-rule:subscriber_user_tokens" // username -> token
-	redisSessionPrefix = "stash-rule:session:"
+	ctx                 = context.Background()
+	rdb                 *redis.Client
+	redisKey            = "stash-rule:subscribe-urls"
+	redisAdminKey       = "stash-rule:admin"
+	redisProfileKey     = "stash-rule:stash_profiles"         // profileName -> yaml content
+	redisTokenKey       = "stash-rule:subscriber_tokens"      // token -> username
+	redisUserTokenKey   = "stash-rule:subscriber_user_tokens" // username -> token
+	redisUserProfileKey = "stash-rule:subscriber_profiles"    // username -> profileName
+	redisSessionPrefix  = "stash-rule:session:"
 )
 
 // InitRedis 初始化 Redis 连接
@@ -50,6 +52,9 @@ func InitRedis() error {
 	// Initialize default admin
 	if err := InitDefaultAdmin(); err != nil {
 		log.Printf("Warning: failed to init default admin: %v", err)
+	}
+	if err := InitDefaultStashProfile(); err != nil {
+		log.Printf("Warning: failed to init default stash profile: %v", err)
 	}
 
 	return nil

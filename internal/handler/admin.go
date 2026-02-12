@@ -10,20 +10,67 @@ import (
 	"my-stash-rule/internal/store"
 )
 
-// HandleAdminPage 渲染管理页面
-func HandleAdminPage(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
+type adminPageData struct {
+	ActivePage string
+	PageTitle  string
+}
 
+func renderAdminPage(w http.ResponseWriter, page, title string) {
 	tmpl, err := template.ParseFS(TemplatesFS, "templates/admin.html")
 	if err != nil {
 		http.Error(w, "Failed to load template", http.StatusInternalServerError)
 		log.Printf("Template error: %v", err)
 		return
 	}
-	tmpl.Execute(w, nil)
+	_ = tmpl.Execute(w, adminPageData{
+		ActivePage: page,
+		PageTitle:  title,
+	})
+}
+
+// HandleAdminPage 入口，跳转到默认模块页面
+func HandleAdminPage(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	http.Redirect(w, r, "/admin/config", http.StatusFound)
+}
+
+// HandleAdminConfigPage 订阅链接配置页
+func HandleAdminConfigPage(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	renderAdminPage(w, "config", "订阅链接配置")
+}
+
+// HandleAdminProfilesPage 模板管理页
+func HandleAdminProfilesPage(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	renderAdminPage(w, "profiles", "Stash 模板管理")
+}
+
+// HandleAdminSubscribersPage 订阅用户管理页
+func HandleAdminSubscribersPage(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	renderAdminPage(w, "subscribers", "订阅用户管理")
+}
+
+// HandleAdminAccountPage 管理员账号设置页
+func HandleAdminAccountPage(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	renderAdminPage(w, "account", "管理员账号设置")
 }
 
 // HandleAdminProfileAPI 管理员资料接口
